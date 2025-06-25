@@ -1,0 +1,6 @@
+In this course a code for computing the trajectory of a car was created.
+Based on the braking and road conditions and the dimensions, weight distribution of a 1998 Honda Civic,
+quantities such as pitch, roll, yaw, acceleration, velocity, sideslip, lockups and forces were computed.
+I have included two pictures.
+In one case as braking begins the car starts to spin.
+In the other case the car must turn to achieve a trajectory around the two red dots.
