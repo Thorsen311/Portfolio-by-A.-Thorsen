@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Dec  7 13:13:21 2023
+Created on Wed Dec  6 09:02:32 2023
 
 @author: anton
 """
@@ -48,7 +48,7 @@ def cost_function(params, action, horizon):
 
 #%% Defining the tuning class
 class MPC_tuning:
-    def __init__(self,params,horizon):
+    def __init__(self,params,horizon=5):
         self.params = params
         self.horizon = horizon
         
@@ -60,17 +60,17 @@ class MPC_tuning:
         return ([-2.]*self.horizon, [2.]*self.horizon) #Defines the bounds of the action [Torque]
 
 #%% Play game
-def play_game(initial_cond, env, controller, printing=False, model=None):
+def play_game(initial_state, env, controller, printing=False, model=None):
     terminated = False
     truncated = False
     state, _ = env.reset()
-    env.unwrapped.state = initial_cond  #Initializing the state
+    env.unwrapped.state = initial_state  #Initializing the state
     
     observations = []
     controls = []
     total_score = 0
     counter = 0  
-    prev_obs = initial_cond
+    prev_obs = initial_state
     horizon = 5 #unnecessary
     
     while not (terminated or truncated):
@@ -79,20 +79,25 @@ def play_game(initial_cond, env, controller, printing=False, model=None):
         
         elif controller == "MPC":
             prob = pg.problem(MPC_tuning(prev_obs, horizon))
-            algo = pg.algorithm(pg.sga(gen=10)) #Simple genetic algorithm
-            pop = pg.population(prob, size=10)
+            algo = pg.algorithm(pg.sga(gen=2)) #Simple genetic algorithm
+            pop = pg.population(prob, size=2)
             pop = algo.evolve(pop)           
             best_controls = pop.champion_x     #Finding best controls
             action = best_controls[0]
             
         elif controller == "NN":
-                prev_obs_NN = torch.tensor([prev_obs[0],prev_obs[1],prev_obs[2]],dtype=torch.float32)
+                x_obs = np.cos(prev_obs[0])
+                y_obs = np.sin(prev_obs[0])
+                prev_obs_NN = torch.tensor([x_obs,y_obs,prev_obs[1]],dtype=torch.float32)
                 prev_obs_NN = prev_obs_NN.reshape(1,-1)
+                #prev_obs_NN = torch.tensor([prev_obs])
                 action = model.predict(prev_obs_NN).item()
 
         controls.append(action)
         obs, reward, terminated, truncated, _ = env.step([action])
-
+        theta = np.arctan2(obs[1],obs[0])
+        omega = obs[2]
+        obs = [theta,omega]
         observations.append(obs)
         prev_obs = obs #Need it to be a [3,] array not a [3,1] for prev_obs to be the correct shape for action = model.predict(prev_obs).item()
         total_score += reward
@@ -114,18 +119,15 @@ def play_X_games(num_games, controller, env, printing = False, model = None):
     elif controller =='NN':
         print('Controller: NN')
     for i in range(num_games):
-        angle = np.random.uniform(-20*np.pi/180, 20*np.pi/180)
-        initial_cond = [np.cos(angle), np.sin(angle), np.random.uniform(-0.1, 0.1)]
+        initial_conditions = [np.random.uniform(-20*np.pi/180, 20*np.pi/180), np.random.uniform(-0.1, 0.1)]
         if printing == True:
             print(f'Game no. {i+1}/{num_games} ')
-        observations, controls, total_score = play_game(initial_cond, env, controller, printing, model) #Calling the play_game function
+        observations, controls, total_score = play_game(initial_conditions, env, controller, printing, model) #Calling the play_game function
         scores.append(total_score)
         obs.append(observations)
         action.append(controls)
         if printing == True:
             print()
-    if printing == True:
-        print(f'Scores from {num_games} games: \n{np.around(np.array(scores), decimals=4)} \n')
     print(f'Average Score [{controller}]: {np.sum(scores)/num_games:.4f}\n')
     return obs, action, scores
 
@@ -135,18 +137,16 @@ def generate_training_data(num_games, env, printing = False):
     counter = 0
     for i in range(num_games):
         score = 0
-        angle = np.random.uniform(-20*np.pi/180, 20*np.pi/180)
-        initial_cond = [np.cos(angle), np.sin(angle), np.random.uniform(-0.1, 0.1)]
+        initial_cond = [np.random.uniform(-20*np.pi/180, 20*np.pi/180), np.random.uniform(-0.1, 0.1)]
         state, _ = env.reset()
         env.unwrapped.state = initial_cond
         game_memory = []
         prev_obs = initial_cond
-
         terminated = False
         truncated = False
         while not (terminated or truncated):
             prob = pg.problem(MPC_tuning(prev_obs, horizon))
-            algo = pg.algorithm(pg.sga(gen=5)) #Simple genetic algorithm
+            algo = pg.algorithm(pg.sga(gen=3)) #Simple genetic algorithm
             pop = pg.population(prob, size=10)
             pop = algo.evolve(pop)           
             best_controls = pop.champion_x     #Finding best controls
@@ -157,12 +157,16 @@ def generate_training_data(num_games, env, printing = False):
             if len(prev_obs) > 0:
                 game_memory.append([prev_obs, action])
             
+            theta = np.arctan2(obs[1],obs[0])
+            omega = obs[2]
+            obs = [theta,omega]
             prev_obs = obs
-            score += reward                       
+            score += reward                     
             
         if score > -2: #If the score of a game is sufficiently good - store it
             for data in game_memory:
-                observations = data[0]
+                angle = data[0][0]
+                observations = [np.cos(angle),np.sin(angle), data[0][1]]
                 actions = data[1]
                 training_data.append([observations, actions])  
         if printing == True:
@@ -176,8 +180,8 @@ def plot_res(observations, controls):
     observations = np.array(observations)
     plt.figure(figsize=(10, 5))
     for i in range(len(observations)):
-        theta = np.arctan2(observations[i,:,1], observations[i,:,0])
-        angular_velocities = observations[i,:,2]
+        theta = observations[i,:,0]
+        angular_velocities = observations[i,:,1]
         plt.subplot(3, 1, 1)
         plt.plot(theta)
         plt.title('Angles')
@@ -201,11 +205,11 @@ def plot_res(observations, controls):
     plt.tight_layout()
     plt.show()
 
-def rendering(initial_cond, controls):
+def rendering(initial_conditions, controls):
    # Initialize the environment
    env = gym.make('Pendulum-v1', g=9.81, render_mode="human")
    state, _ = env.reset()
-   env.unwrapped.state = initial_cond
+   env.unwrapped.state = initial_conditions
    observations = []
    terminated = False
    truncated = False
@@ -221,24 +225,24 @@ def rendering(initial_cond, controls):
 #%% Score of X games
 
 num_games = 2
-#observations_rand, controls_rand, total_scores_rand = play_X_games(num_games, 'RANDOM', main_env)
+observations_rand, controls_rand, total_scores_rand = play_X_games(num_games, 'RANDOM', main_env)
 
-#observations_mpc, controls_mpc, total_scores_mpc = play_X_games(num_games, 'MPC', main_env, printing = True)
+observations_mpc, controls_mpc, total_scores_mpc = play_X_games(num_games, 'MPC', main_env, printing = True)
 elapsed_time = time.time() - start_time
 print(f"\nElapsed time for Part 1: {elapsed_time:.4f} seconds")
 
 #%%
-#plot_res([observations_mpc[0]],[controls_mpc[0]])
+plot_res([observations_mpc[0]],[controls_mpc[0]])
 
 #%%
-#angle = np.random.uniform(-20*np.pi/180, 20*np.pi/180)
-#initial_cond = [np.cos(angle),np.sin(angle), np.random.uniform(-0.1, 0.1)]
-#observations, controls, total_score = play_game(initial_cond, main_env, 'MPC')
-#rendering(initial_cond, controls)
+#initial_conditions = [np.random.uniform(-20*np.pi/180, 20*np.pi/180), np.random.uniform(-0.1, 0.1)]
+#observations, controls, total_score = play_game(initial_conditions, main_env, 'MPC')
+#rendering(initial_conditions, controls)
 
 #%%
 start_time = time.time()
-#training_data = generate_training_data(2, main_env, printing = True)
+training_data = generate_training_data(30, main_env, printing = True)
+
 elapsed_time = time.time() - start_time
 print(f"\nElapsed time for generating training data: {elapsed_time:.4f} seconds")
 
@@ -246,11 +250,11 @@ print(f"\nElapsed time for generating training data: {elapsed_time:.4f} seconds"
 # Initializing
 data = np.load(r'C:/Users/anton/OneDrive - Aarhus Universitet/7. semester/Data Science/Final Assignment/training_pendulum.npy')
 data_2000 = data[4000:6000,:]
-X = data_2000[:,0:3]
-y = data_2000[:,3].reshape(-1,1)
+#X = data_2000[:,0:3]
+#y = data_2000[:,3].reshape(-1,1)
 # %% Splitting
-#X = np.array([entry[0] for entry in training_data[:2000]])
-#y = np.array([entry[1] for entry in training_data[:2000]]).reshape(-1,1)
+X = np.array([entry[0] for entry in training_data[:2000]])
+y = np.array([entry[1] for entry in training_data[:2000]]).reshape(-1,1)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
 # %% NN
@@ -259,7 +263,7 @@ y_ = torch.tensor(y_train, dtype=torch.float32)
 
 #%% Defining the neural network
 class NN(nn.Module): #Simple network with only 1 hidden layer
-    def __init__(self,num_units=32):
+    def __init__(self,num_units):
         super().__init__()
         self.linear_relu_stack = nn.Sequential(
             nn.Linear(3, num_units),
@@ -282,7 +286,7 @@ lr = 0.01
 
 from skorch.callbacks import EarlyStopping #This stops the epochs if validation starts to go up
 
-model = NeuralNetRegressor(module=NN, lr=lr, verbose=0, max_epochs=epochs, module__num_units=32, 
+model = NeuralNetRegressor(module=NN, lr=lr, verbose=0, max_epochs=epochs, module__num_units=40, 
                            batch_size=64, callbacks=[('estoper',EarlyStopping(patience=30)),],
                            iterator_train__shuffle = True, optimizer__weight_decay=0.,optimizer=torch.optim.Adam, criterion=torch.nn.MSELoss,)
 
@@ -331,9 +335,9 @@ plt.title('gs: Losses')
 plt.legend()
 
 #%% Playing 2000 games
-num_games = 10 #Takes about 5 minutes for 2000 games and for only 1 set of params
-obs_rand, controls_rand, scores_rand = play_X_games(num_games, 'RANDOM', main_env)
-obs_NN, controls_NN, scores_NN = play_X_games(num_games, 'NN', main_env, printing=False, model=gs)
+num_games = 100 #Takes about 5 minutes for 2000 games and for only 1 set of params
+obs_rand, controls_rand, scores_rand = play_X_games(num_games, 'RANDOM', main_env,)
+obs_NN, controls_NN, scores_NN = play_X_games(num_games, 'NN', main_env, model=gs)
 
 plt.figure()
 plt.plot(scores_NN, label = 'Neural Network')
@@ -350,10 +354,6 @@ elapsed_time = time.time() - start_time
 print(f"\nElapsed time for Part 2: {elapsed_time:.4f} seconds")
 
 #%% Rendering
-angle = np.random.uniform(-20*np.pi/180, 20*np.pi/180)
-initial_cond = [np.cos(angle),np.sin(angle), np.random.uniform(-0.1, 0.1)]
-observations, controls, total_score = play_game(initial_cond, main_env, 'NN', model=gs.best_estimator_)
-rendering(initial_cond, controls)
-
-
-
+#initial_conditions = [np.random.uniform(-20*np.pi/180, 20*np.pi/180), np.random.uniform(-0.1, 0.1)]
+#observations, controls, total_score = play_game(initial_conditions, main_env, 'NN', model=gs.best_estimator_)
+#rendering(initial_conditions, controls)
